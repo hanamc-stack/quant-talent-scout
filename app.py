@@ -51,7 +51,6 @@ def init_db():
             linkedin_url TEXT
         )
     """)
-    # Seed default EQR vacancy if empty
     c.execute("SELECT COUNT(*) FROM vacancies")
     if c.fetchone()[0] == 0:
         c.execute("""
@@ -157,6 +156,7 @@ def scan_github_repo(repo_name: str, limit: int, token: str = ""):
         loc_lower = location.lower()
         is_us = 1 if any(ind in loc_lower for ind in us_indicators) else 0
 
+        search_text = f"{bio} {company} {repo_name}".lower()
         score = 20 if is_us else 5
         matched = []
         keywords = {
@@ -170,9 +170,6 @@ def scan_github_repo(repo_name: str, limit: int, token: str = ""):
                 matched.append(kw)
         if company != "Not listed":
             score += 10
-
-        search_q = urllib.parse.quote(f"{name} {company if company != 'Not listed' else ''}")
-        linkedin_search = f"https://www.linkedin.com/search/results/people/?keywords={search_q}"
 
         cand = {
             "username": f"gh_{username}",
@@ -189,7 +186,7 @@ def scan_github_repo(repo_name: str, limit: int, token: str = ""):
             "score": min(score, 100),
             "matched_skills": ", ".join(matched) if matched else "GitHub Contributor",
             "status": "New",
-            "notes": f"Verified LinkedIn Search: {linkedin_search}"
+            "notes": ""
         }
         upsert_candidate(cand)
         added += 1
@@ -232,199 +229,4 @@ def scan_arxiv(query_str: str, max_results: int = 5):
             "username": f"arxiv_{slug}",
             "name": primary_author,
             "employer": "Academic / Research Institution",
-            "role": "Research Author",
-            "location": "United States (Verified via arXiv Metadata)" if "US" in summary or "University" in summary else "Global / Unverified",
-            "is_us": 1 if "US" in summary or "University" in summary else 0,
-            "bio": f"Author of arXiv paper: '{title}'",
-            "github_url": "",
-            "linkedin_url": "",
-            "evidence": f"Paper: {title}. Abstract snippet: {summary[:150]}... Link: {pdf_link}",
-            "source": "arXiv Research",
-            "score": min(score, 100),
-            "matched_skills": ", ".join(matched),
-            "status": "New",
-            "notes": f"Co-authors: {', '.join(authors)}"
-        }
-        upsert_candidate(cand)
-        added += 1
-    return added
-
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="Quant Talent Scout", layout="wide")
-
-st.title("🎯 Quant Talent Scout")
-st.caption("Independent AI-Driven Talent Intelligence for US Quantitative Finance & Engineering Roles (€0 Local Stack)")
-
-vacancies_df = get_vacancies()
-active_vacancy = st.sidebar.selectbox("Select Active Vacancy", vacancies_df["title"].tolist())
-vac_row = vacancies_df[vacancies_df["title"] == active_vacancy].iloc[0]
-
-with st.sidebar:
-    st.header("⚙️ Vacancy Brief")
-    st.markdown(f"**Client:** {vac_row['client']}")
-    st.markdown(f"**Required:** {vac_row['required_skills']}")
-    st.markdown(f"**Desirable:** {vac_row['desirable_skills']}")
-    
-    st.divider()
-    st.header("🔍 Autonomous Discovery")
-    gh_token = st.text_input("Optional GitHub Token (Rate limit unlock)", type="password")
-    repo_choice = st.text_input("Target GitHub Repo", value="pola-rs/polars")
-    arxiv_query = st.text_input("Target arXiv Research Topic", value="quantitative finance portfolio optimisation python")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Scan GitHub", use_container_width=True):
-            try:
-                with st.spinner("Scanning GitHub contributors..."):
-                    cnt = scan_github_repo(repo_choice, 15, gh_token)
-                st.success(f"Added {cnt} leads from GitHub!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
-    with col_b:
-        if st.button("Scan arXiv", use_container_width=True):
-            try:
-                with st.spinner("Querying arXiv research papers..."):
-                    cnt = scan_arxiv(arxiv_query, 5)
-                st.success(f"Added {cnt} researchers from arXiv!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-    st.divider()
-    st.header("📂 Known Candidates (Duplicate Check)")
-    uploaded_known = st.file_uploader("Upload Kevin's Known Candidates CSV", type=["csv"])
-    if uploaded_known is not None:
-        known_df = pd.read_csv(uploaded_known)
-        conn = sqlite3.connect(DB_PATH)
-        known_df.to_sql("known_candidates", conn, if_exists="replace", index=False)
-        conn.close()
-        st.success(f"Loaded {len(known_df)} known candidates for auto-deduplication.")
-
-# --- MAIN DASHBOARD TABS ---
-df_candidates = load_candidates_df()
-
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Candidate Pipeline", "🔍 Review & Verification", "💬 WhatsApp Shortlist", "⚙️ Vacancies & Settings"])
-
-with tab1:
-    st.subheader(f"Discovered Candidates ({len(df_candidates)})")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        filter_us = st.checkbox("US-Based Only", value=False)
-    with col2:
-        min_score = st.slider("Minimum Fit Score", 0, 100, 20)
-    with col3:
-        status_filter = st.multiselect("Status Filter", ["New", "Shortlisted", "Sent to Kevin", "Archived"], default=["New", "Shortlisted", "Sent to Kevin"])
-
-    filtered_df = df_candidates[df_candidates["score"] >= min_score]
-    if filter_us:
-        filtered_df = filtered_df[filtered_df["is_us"] == 1]
-    if status_filter:
-        filtered_df = filtered_df[filtered_df["status"].isin(status_filter)]
-
-    display_cols = ["name", "employer", "role", "location", "is_us", "score", "matched_skills", "source", "status", "github_url"]
-    st.dataframe(
-        filtered_df[display_cols],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "github_url": st.column_config.LinkColumn("GitHub / Source"),
-            "is_us": st.column_config.CheckboxColumn("US?"),
-            "score": st.column_config.ProgressColumn("Match Score", min_value=0, max_value=100, format="%d")
-        }
-    )
-
-    col_ex1, col_ex2 = st.columns(2)
-    with col_ex1:
-        csv_data = filtered_df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Export to CSV", csv_data, "quant_talent_shortlist.csv", "text/csv", use_container_width=True)
-    with col_ex2:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            filtered_df.to_excel(writer, index=False, sheet_name='Shortlist')
-        excel_data = output.getvalue()
-        st.download_button("📊 Export to Excel", excel_data, "quant_talent_shortlist.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-with tab2:
-    st.subheader("Candidate Profile Verification & Triage")
-    if filtered_df.empty:
-        st.warning("No candidates available under current filters.")
-    else:
-        selected_cand_username = st.selectbox(
-            "Select Candidate to Review",
-            filtered_df["username"].tolist(),
-            format_func=lambda u: f"{filtered_df[filtered_df['username']==u]['name'].values[0]} ({filtered_df[filtered_df['username']==u]['employer'].values[0]}) — Score: {filtered_df[filtered_df['username']==u]['score'].values[0]}"
-        )
-        cand_row = filtered_df[filtered_df["username"] == selected_cand_username].iloc[0]
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(f"**Name:** {cand_row['name']}")
-            st.markdown(f"**Employer / Institution:** {cand_row['employer']}")
-            st.markdown(f"**Role:** {cand_row['role']}")
-            st.markdown(f"**Location:** {cand_row['location']}")
-            st.markdown(f"**Source:** {cand_row['source']}")
-            if cand_row["github_url"]:
-                st.markdown(f"**GitHub Profile:** [{cand_row['github_url']}]({cand_row['github_url']})")
-        with c2:
-            st.markdown(f"**Bio / Summary:** {cand_row['bio'] or '_None_'}")
-            st.markdown(f"**Evidence & Signals:** {cand_row['evidence']}")
-            st.markdown(f"**Matched Skills:** `{cand_row['matched_skills']}`")
-
-        with st.form("triage_form"):
-            new_status = st.selectbox("Pipeline Status", ["New", "Shortlisted", "Sent to Kevin", "Archived"], index=["New", "Shortlisted", "Sent to Kevin", "Archived"].index(cand_row["status"]))
-            new_linkedin = st.text_input("Verified LinkedIn URL (Manual entry after verification)", value=cand_row["linkedin_url"] or "")
-            new_notes = st.text_area("Verification Notes", value=cand_row["notes"] or "")
-            if st.form_submit_button("Save Candidate Review"):
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("UPDATE candidates SET status = ?, linkedin_url = ?, notes = ? WHERE username = ?", (new_status, new_linkedin, new_notes, selected_cand_username))
-                conn.commit()
-                conn.close()
-                st.success("Candidate record updated successfully!")
-                st.rerun()
-
-with tab3:
-    st.subheader("WhatsApp-Ready Shortlist")
-    st.caption("Copy this formatted summary directly into WhatsApp for Kevin.")
-    
-    shortlisted_df = df_candidates[df_candidates["status"] == "Shortlisted"]
-    if shortlisted_df.empty:
-        st.info("Mark candidates as **Shortlisted** in the 'Review & Verification' tab to generate the WhatsApp report.")
-    else:
-        lines = [f"📊 *{active_vacancy} — Independent Talent Shortlist*\n"]
-        for idx, (_, r) in enumerate(shortlisted_df.iterrows(), 1):
-            lines.append(f"*{idx}. {r['name']}*")
-            lines.append(f"• Employer: {r['employer']}")
-            lines.append(f"• Location: {r['location']}")
-            if r["linkedin_url"]:
-                lines.append(f"• LinkedIn: {r['linkedin_url']}")
-            if r["github_url"]:
-                lines.append(f"• GitHub: {r['github_url']}")
-            lines.append(f"• Why Fit: {r['evidence']}")
-            if r["notes"]:
-                lines.append(f"• Notes: {r['notes']}")
-            lines.append("")
-        whatsapp_text = "\n".join(lines)
-        st.code(whatsapp_text, language="markdown")
-
-with tab4:
-    st.subheader("Vacancy Management & Add New Role")
-    with st.form("new_vacancy_form"):
-        new_title = st.text_input("Vacancy Title", placeholder="e.g., GQS C++ Trading Systems Engineer")
-        new_client = st.text_input("Client / Internal Label", placeholder="e.g., GQS / Citadel Securities")
-        req_skills = st.text_area("Required Skills", placeholder="C++, Low-latency, Python")
-        des_skills = st.text_area("Desirable Skills", placeholder="FPGA, Kernel bypass, SIMD")
-        if st.form_submit_button("Create Vacancy"):
-            try:
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("INSERT INTO vacancies (title, client, required_skills, desirable_skills) VALUES (?, ?, ?, ?)",
-                          (new_title, new_client, req_skills, des_skills))
-                conn.commit()
-                conn.close()
-                st.success(f"Successfully created vacancy: {new_title}")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+            "role": "Research
