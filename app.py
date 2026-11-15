@@ -294,4 +294,127 @@ with tab1:
     with col2:
         min_score = st.slider("Minimum Fit Score", 0, 100, 20)
     with col3:
-        status_filter = st.multiselect("Status Filter", ["New", "Shortlisted", "Sent to Kevin", "Archived"], default
+        status_filter = st.multiselect("Status Filter", ["New", "Shortlisted", "Sent to Kevin", "Archived"], default=["New", "Shortlisted", "Sent to Kevin"])
+
+    filtered_df = df_candidates[df_candidates["score"] >= min_score]
+    if filter_us:
+        filtered_df = filtered_df[filtered_df["is_us"] == 1]
+    if status_filter:
+        filtered_df = filtered_df[filtered_df["status"].isin(status_filter)]
+
+    display_cols = ["name", "employer", "role", "location", "is_us", "score", "matched_skills", "source", "status", "github_url"]
+    st.dataframe(
+        filtered_df[display_cols],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "github_url": st.column_config.LinkColumn("Evidence Link"),
+            "is_us": st.column_config.CheckboxColumn("US?"),
+            "score": st.column_config.ProgressColumn("Match Score", min_value=0, max_value=100, format="%d")
+        }
+    )
+
+    col_ex1, col_ex2 = st.columns(2)
+    with col_ex1:
+        csv_data = df_candidates.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Export All to CSV (Backup)", csv_data, "quant_talent_backup.csv", "text/csv", use_container_width=True)
+    with col_ex2:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            filtered_df.to_excel(writer, index=False, sheet_name='Shortlist')
+        excel_data = output.getvalue()
+        st.download_button("📊 Export Filtered to Excel", excel_data, "quant_talent_shortlist.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
+with tab2:
+    st.subheader("Candidate Profile Verification & Triage")
+    if filtered_df.empty:
+        st.warning("No candidates available under current filters.")
+    else:
+        selected_cand_username = st.selectbox(
+            "Select Candidate to Review",
+            filtered_df["username"].tolist(),
+            format_func=lambda u: f"{filtered_df[filtered_df['username']==u]['name'].values[0]} ({filtered_df[filtered_df['username']==u]['employer'].values[0]}) — Score: {filtered_df[filtered_df['username']==u]['score'].values[0]}"
+        )
+        cand_row = filtered_df[filtered_df["username"] == selected_cand_username].iloc[0]
+
+        clean_emp = cand_row['employer'] if cand_row['employer'] not in ["Not listed", "Academic / Research Institution"] else ""
+        search_q = urllib.parse.quote(f"{cand_row['name']} {clean_emp}".strip())
+        linkedin_search_url = f"https://www.linkedin.com/search/results/people/?keywords={search_q}"
+
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            st.link_button("🔎 Find on LinkedIn (1-Tap Search)", linkedin_search_url, type="primary", use_container_width=True)
+        with btn_col2:
+            if cand_row["github_url"]:
+                st.link_button("🔗 Open GitHub / Paper Evidence", cand_row["github_url"], use_container_width=True)
+
+        st.divider()
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"**Name:** {cand_row['name']}")
+            st.markdown(f"**Employer / Institution:** {cand_row['employer']}")
+            st.markdown(f"**Role:** {cand_row['role']}")
+            st.markdown(f"**Location:** {cand_row['location']}")
+            st.markdown(f"**Source:** {cand_row['source']}")
+        with c2:
+            st.markdown(f"**Bio / Summary:** {cand_row['bio'] or '_None_'}")
+            st.markdown(f"**Evidence & Signals:** {cand_row['evidence']}")
+            st.markdown(f"**Matched Skills:** `{cand_row['matched_skills']}`")
+
+        with st.form("triage_form"):
+            new_status = st.selectbox("Pipeline Status", ["New", "Shortlisted", "Sent to Kevin", "Archived"], index=["New", "Shortlisted", "Sent to Kevin", "Archived"].index(cand_row["status"]))
+            new_linkedin = st.text_input("Verified LinkedIn Profile URL (Paste here once found)", value=cand_row["linkedin_url"] or "")
+            new_notes = st.text_area("Verification Notes", value=cand_row["notes"] or "")
+            if st.form_submit_button("Save Candidate Review", use_container_width=True):
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("UPDATE candidates SET status = ?, linkedin_url = ?, notes = ? WHERE username = ?", (new_status, new_linkedin, new_notes, selected_cand_username))
+                conn.commit()
+                conn.close()
+                st.success("Candidate record updated successfully!")
+                st.rerun()
+
+with tab3:
+    st.subheader("WhatsApp-Ready Shortlist")
+    st.caption("Tap the copy icon in the top-right corner of the box below to paste directly into WhatsApp for Kevin.")
+    
+    shortlisted_df = df_candidates[df_candidates["status"] == "Shortlisted"]
+    if shortlisted_df.empty:
+        st.info("Mark candidates as **Shortlisted** in the 'Review & Verification' tab to generate the WhatsApp report.")
+    else:
+        lines = [f"📊 *{active_vacancy} — Independent Talent Shortlist*\n"]
+        for idx, (_, r) in enumerate(shortlisted_df.iterrows(), 1):
+            lines.append(f"*{idx}. {r['name']}*")
+            lines.append(f"• Employer: {r['employer']}")
+            lines.append(f"• Location: {r['location']}")
+            if r["linkedin_url"]:
+                lines.append(f"• LinkedIn: {r['linkedin_url']}")
+            if r["github_url"]:
+                lines.append(f"• Evidence: {r['github_url']}")
+            lines.append(f"• Why Fit: {r['evidence']}")
+            if r["notes"]:
+                lines.append(f"• Notes: {r['notes']}")
+            lines.append("")
+        whatsapp_text = "\n".join(lines)
+        st.code(whatsapp_text, language="markdown")
+
+with tab4:
+    st.subheader("Vacancy Management & Add New Role")
+    with st.form("new_vacancy_form"):
+        new_title = st.text_input("Vacancy Title", placeholder="e.g., GQS C++ Trading Systems Engineer")
+        new_client = st.text_input("Client / Internal Label", placeholder="e.g., GQS / Citadel Securities")
+        req_skills = st.text_area("Required Skills", placeholder="C++, Low-latency, Python")
+        des_skills = st.text_area("Desirable Skills", placeholder="FPGA, Kernel bypass, SIMD")
+        if st.form_submit_button("Create Vacancy"):
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("INSERT INTO vacancies (title, client, required_skills, desirable_skills) VALUES (?, ?, ?, ?)",
+                          (new_title, new_client, req_skills, des_skills))
+                conn.commit()
+                conn.close()
+                st.success(f"Successfully created vacancy: {new_title}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
