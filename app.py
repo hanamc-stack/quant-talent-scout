@@ -61,7 +61,8 @@ def init_db():
             "EQR Quantitative Developer",
             "Citadel / EQR",
             "Python, C++, PySpark, Polars, Parquet, Apache Arrow",
-            "NumPy, Cython, Gurobi, MOSEK, BLAS/LAPACK, Backtesting, Simulation"
+            "NumPy, Cython, Gurobi, MOSEK, BLAS/LAPACK, Backtesting, Simulation",
+            "Active"
         ))
     conn.commit()
     conn.close()
@@ -78,7 +79,6 @@ def get_vacancies():
 def upsert_candidate(data: dict):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Check duplicate against known candidates list
     c.execute("SELECT COUNT(*) FROM known_candidates WHERE lower(name) = lower(?)", (data["name"],))
     is_known = c.fetchone()[0] > 0
     if is_known:
@@ -88,7 +88,6 @@ def upsert_candidate(data: dict):
     c.execute("SELECT status, notes, linkedin_url FROM candidates WHERE username = ?", (data["username"],))
     existing = c.fetchone()
     if existing:
-        # Preserve existing manual status/notes if already reviewed
         status = existing[0] if existing[0] != 'New' else data["status"]
         notes = existing[1] if existing[1] else data.get("notes", "")
         linkedin = existing[2] if existing[2] else data.get("linkedin_url", "")
@@ -154,13 +153,10 @@ def scan_github_repo(repo_name: str, limit: int, token: str = ""):
         bio = u_data.get("bio") or ""
         html_url = u_data.get("html_url")
 
-        # Heuristics for US location
         us_indicators = ["usa", "united states", "u.s.", "ny", "new york", "chicago", "san francisco", "ca", "boston", "ma", "seattle", "wa", "austin", "tx", "ct", "nj"]
         loc_lower = location.lower()
         is_us = 1 if any(ind in loc_lower for ind in us_indicators) else 0
 
-        # Scoring
-        search_text = f"{bio} {company} {repo_name}".lower()
         score = 20 if is_us else 5
         matched = []
         keywords = {
@@ -175,7 +171,6 @@ def scan_github_repo(repo_name: str, limit: int, token: str = ""):
         if company != "Not listed":
             score += 10
 
-        # LinkedIn verified search helper link
         search_q = urllib.parse.quote(f"{name} {company if company != 'Not listed' else ''}")
         linkedin_search = f"https://www.linkedin.com/search/results/people/?keywords={search_q}"
 
@@ -222,11 +217,9 @@ def scan_arxiv(query_str: str, max_results: int = 5):
 
         authors = [a.find('atom:name', ns).text for a in entry.findall('atom:author', ns)]
         primary_author = authors[0] if authors else "Unknown Author"
-        
-        # Create unique username slug
         slug = primary_author.lower().replace(" ", "_")
         
-        score = 65  # High baseline for published researchers in quant/optimisation
+        score = 65
         matched = ["research paper", "arxiv"]
         if "python" in summary.lower() or "c++" in summary.lower():
             score += 15
@@ -342,7 +335,6 @@ with tab1:
         }
     )
 
-    # Export Buttons
     col_ex1, col_ex2 = st.columns(2)
     with col_ex1:
         csv_data = filtered_df.to_csv(index=False).encode('utf-8')
