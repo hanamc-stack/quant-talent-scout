@@ -133,34 +133,36 @@ def scan_github_repo(repo_name: str, limit: int, token: str = ""):
         is_us = 1 if any(ind in loc_lower for ind in us_indicators) else 0
 
         search_text = f"{bio} {company} {repo_name}".lower()
-        score = 20 if is_us else 5
+        
+        # High-precision quant scoring
+        score = 15 if is_us else 5
         matched = []
         keywords = {
-            "c++": 25, "cpp": 25, "python": 15, "cython": 20, "polars": 20,
-            "arrow": 20, "parquet": 15, "pyspark": 15, "numpy": 10,
-            "quant": 25, "trading": 20, "backtest": 20, "gurobi": 25, "mosek": 25
+            "c++": 30, "cpp": 30, "cython": 35, "gurobi": 35, "mosek": 35,
+            "quant": 30, "trading": 30, "backtest": 30, "optimization": 25,
+            "python": 10, "polars": 15, "arrow": 15, "numpy": 5
         }
         for kw, wt in keywords.items():
             if kw in search_text:
                 score += wt
                 matched.append(kw)
         if company != "Not listed":
-            score += 10
+            score += 15
 
         cand = {
             "username": f"gh_{username}",
             "name": name,
             "employer": company,
-            "role": "Open-Source Contributor",
+            "role": "Open-Source Systems Engineer",
             "location": location,
             "is_us": is_us,
             "bio": bio,
             "github_url": html_url,
             "linkedin_url": "",
-            "evidence": f"Contributor to {repo_name}. Matched keywords: {', '.join(matched) if matched else 'General contributor'}",
+            "evidence": f"Contributor to {repo_name}. Matched elite keywords: {', '.join(matched) if matched else 'None'}",
             "source": f"GitHub ({repo_name})",
             "score": min(score, 100),
-            "matched_skills": ", ".join(matched) if matched else "GitHub Contributor",
+            "matched_skills": ", ".join(matched) if matched else "General Contributor",
             "status": "New",
             "notes": ""
         }
@@ -191,22 +193,23 @@ def scan_arxiv(query_str: str, max_results: int = 5):
         primary_author = authors[0] if authors else "Unknown Author"
         slug = primary_author.lower().replace(" ", "_")
         
-        score = 65
-        matched = ["research paper", "arxiv"]
-        if "python" in summary.lower() or "c++" in summary.lower():
-            score += 15
-            matched.append("code/perf mention")
-        if "optimisation" in summary.lower() or "optimization" in summary.lower() or "portfolio" in summary.lower():
-            score += 15
-            matched.append("optimisation/quant")
+        sum_lower = summary.lower()
+        score = 50
+        matched = ["research paper"]
+        if "c++" in sum_lower or "python" in sum_lower or "cython" in sum_lower:
+            score += 20
+            matched.append("code performance")
+        if "portfolio" in sum_lower or "trading" in sum_lower or "execution" in sum_lower or "optimization" in sum_lower:
+            score += 20
+            matched.append("quant finance/math")
 
         cand = {
             "username": f"arxiv_{slug}",
             "name": primary_author,
             "employer": "Academic / Research Institution",
             "role": "Research Author",
-            "location": "United States (Verified via arXiv Metadata)" if "US" in summary or "University" in summary else "Global / Unverified",
-            "is_us": 1 if "US" in summary or "University" in summary else 0,
+            "location": "United States (Verified via arXiv Metadata)" if "US" in sum_lower or "university" in sum_lower else "Global / Unverified",
+            "is_us": 1 if "us" in sum_lower or "university" in sum_lower else 0,
             "bio": f"Author of arXiv paper: '{title}'",
             "github_url": pdf_link,
             "linkedin_url": "",
@@ -239,8 +242,8 @@ with st.sidebar:
     st.divider()
     st.header("🔍 Autonomous Discovery")
     gh_token = st.text_input("Optional GitHub Token (Rate limit unlock)", type="password")
-    repo_choice = st.text_input("Target GitHub Repo", value="pola-rs/polars")
-    arxiv_query = st.text_input("Target arXiv Research Topic", value="quantitative finance portfolio optimisation python")
+    repo_choice = st.text_input("Target GitHub Repo", value="pybind/pybind11")
+    arxiv_query = st.text_input("Target arXiv Research Topic", value="high-frequency trading order book execution C++ python")
     
     col_a, col_b = st.columns(2)
     with col_a:
@@ -292,7 +295,7 @@ with tab1:
     with col1:
         filter_us = st.checkbox("US-Based Only", value=False)
     with col2:
-        min_score = st.slider("Minimum Fit Score", 0, 100, 20)
+        min_score = st.slider("Minimum Fit Score", 0, 100, 40)
     with col3:
         status_filter = st.multiselect("Status Filter", ["New", "Shortlisted", "Sent to Kevin", "Archived"], default=["New", "Shortlisted", "Sent to Kevin"])
 
@@ -328,7 +331,7 @@ with tab1:
 with tab2:
     st.subheader("Candidate Profile Verification & Triage")
     if filtered_df.empty:
-        st.warning("No candidates available under current filters.")
+        st.warning("No candidates available under current filters. Try lowering the Minimum Fit Score slider or scanning `pybind/pybind11`.")
     else:
         selected_cand_username = st.selectbox(
             "Select Candidate to Review",
